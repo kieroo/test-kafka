@@ -25,6 +25,17 @@ python3 dual_invest_strategy.py --demo
 
 这会生成一段模拟行情并执行策略，输出回测结果。
 
+## 获取真实数据回测（无需手动下载）
+
+```bash
+python3 dual_invest_strategy.py --real --days 365
+```
+
+说明：
+- `--real` 会从 CoinGecko 拉取 BTC 日线收盘价（公开 API）。
+- `--days` 可调整回看天数（例如 180 / 730）。
+- 若你所在环境无法联网，可先导出 CSV 后使用 `--csv`。
+
 ## 自定义数据回测
 
 准备一个 CSV（按日），包含字段：
@@ -37,6 +48,8 @@ python3 dual_invest_strategy.py --demo
 ```bash
 python3 dual_invest_strategy.py --csv your_btc_daily.csv
 ```
+
+三个数据源参数三选一：`--demo` / `--csv` / `--real`。
 
 ## 参数建议（偏稳健）
 

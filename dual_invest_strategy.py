@@ -281,6 +281,109 @@ def load_coingecko(days: int = 365, vs_currency: str = "usd") -> List[Candle]:
     return candles
 
 
+def load_binance(days: int = 365, symbol: str = "BTCUSDT") -> List[Candle]:
+    """Load BTC daily close data from Binance Kline API."""
+
+    if days <= 0:
+        raise ValueError("days must be a positive integer")
+    if days > 1000:
+        raise ValueError("Binance source supports up to 1000 days per request")
+
+    url = (
+        "https://api.binance.com/api/v3/klines"
+        f"?symbol={symbol}&interval=1d&limit={days}"
+    )
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "dual-invest-strategy/1.0",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except URLError as e:
+        raise ValueError(f"Failed to fetch real data from Binance: {e}") from e
+
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("No kline data returned from Binance API")
+
+    candles: List[Candle] = []
+    for row in payload:
+        open_time_ms = int(row[0])
+        close = float(row[4])
+        d = datetime.utcfromtimestamp(open_time_ms / 1000).date()
+        candles.append(Candle(date=datetime.combine(d, datetime.min.time()), close=close))
+
+    candles.sort(key=lambda x: x.date)
+    return candles
+
+
+def load_okx(days: int = 365, inst_id: str = "BTC-USDT") -> List[Candle]:
+    """Load BTC daily close data from OKX Candles API."""
+
+    if days <= 0:
+        raise ValueError("days must be a positive integer")
+    if days > 300:
+        raise ValueError("OKX source supports up to 300 days per request")
+
+    url = f"https://www.okx.com/api/v5/market/history-candles?instId={inst_id}&bar=1D&limit={days}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "dual-invest-strategy/1.0",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except URLError as e:
+        raise ValueError(f"Failed to fetch real data from OKX: {e}") from e
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not data:
+        raise ValueError("No candle data returned from OKX API")
+
+    candles: List[Candle] = []
+    for row in data:
+        ts_ms = int(row[0])
+        close = float(row[4])
+        d = datetime.utcfromtimestamp(ts_ms / 1000).date()
+        candles.append(Candle(date=datetime.combine(d, datetime.min.time()), close=close))
+
+    candles.sort(key=lambda x: x.date)
+    return candles
+
+
+def load_real_data(days: int, source: str) -> List[Candle]:
+    source = source.lower()
+    loaders = {
+        "coingecko": lambda: load_coingecko(days=days),
+        "binance": lambda: load_binance(days=days),
+        "okx": lambda: load_okx(days=days),
+    }
+
+    if source != "auto":
+        if source not in loaders:
+            raise ValueError("Unknown real source. Use auto/coingecko/binance/okx")
+        return loaders[source]()
+
+    errors = []
+    for name in ("okx", "binance", "coingecko"):
+        try:
+            candles = loaders[name]()
+            print(f"[real-data] source={name}, records={len(candles)}")
+            return candles
+        except ValueError as e:
+            errors.append(f"{name}: {e}")
+
+    raise ValueError("Failed to fetch from all real sources. " + " | ".join(errors))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="BTC 双币赢稳健策略模拟器")
     parser.add_argument("--csv", help="CSV path with date,close")
@@ -288,13 +391,19 @@ def main() -> None:
     parser.add_argument(
         "--real",
         action="store_true",
-        help="Use real BTC daily closes from CoinGecko",
+        help="Use real BTC daily closes from online APIs",
     )
     parser.add_argument(
         "--days",
         type=int,
         default=365,
         help="Number of days for --real source (default: 365)",
+    )
+    parser.add_argument(
+        "--real-source",
+        default="auto",
+        choices=["auto", "okx", "binance", "coingecko"],
+        help="Data source for --real (default: auto, try okx->binance->coingecko)",
     )
     args = parser.parse_args()
 
@@ -306,7 +415,7 @@ def main() -> None:
         if args.csv:
             candles = load_csv(args.csv)
         elif args.real:
-            candles = load_coingecko(days=args.days)
+            candles = load_real_data(days=args.days, source=args.real_source)
         else:
             candles = generate_demo()
     except ValueError as e:

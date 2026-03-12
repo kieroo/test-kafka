@@ -28,12 +28,13 @@ python3 dual_invest_strategy.py --demo
 ## 获取真实数据回测（无需手动下载）
 
 ```bash
-python3 dual_invest_strategy.py --real --days 365
+python3 dual_invest_strategy.py --real --days 365 --real-source auto
 ```
 
 说明：
-- `--real` 会从 CoinGecko 拉取 BTC 日线收盘价（公开 API）。
-- `--days` 可调整回看天数（例如 180 / 730）。
+- `--real` 支持多数据源：`okx`、`binance`、`coingecko`。
+- `--real-source auto` 会按 `okx -> binance -> coingecko` 自动回退，适合中国网络环境提高可用性。
+- `--days` 可调整回看天数（例如 180 / 365）；受交易所接口限制，`okx` 最多 300 天，`binance` 最多 1000 天。
 - 若你所在环境无法联网，可先导出 CSV 后使用 `--csv`。
 
 ## 自定义数据回测
@@ -50,6 +51,19 @@ python3 dual_invest_strategy.py --csv your_btc_daily.csv
 ```
 
 三个数据源参数三选一：`--demo` / `--csv` / `--real`。
+
+`--real` 可配合 `--real-source` 指定来源：
+
+```bash
+# 自动选择（推荐）
+python3 dual_invest_strategy.py --real --days 180 --real-source auto
+
+# 强制走 OKX（中国通常可访问）
+python3 dual_invest_strategy.py --real --days 180 --real-source okx
+
+# 强制走 Binance
+python3 dual_invest_strategy.py --real --days 365 --real-source binance
+```
 
 ## 参数建议（偏稳健）
 

@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 import random
+import urllib.request
+from urllib.error import URLError
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -231,16 +234,84 @@ def generate_demo(days: int = 365) -> List[Candle]:
     return candles
 
 
+def load_coingecko(days: int = 365, vs_currency: str = "usd") -> List[Candle]:
+    """Load BTC daily close data from CoinGecko public API.
+
+    API endpoint returns [timestamp_ms, price] pairs. We keep the last price
+    observed per UTC date as the daily close.
+    """
+
+    if days <= 0:
+        raise ValueError("days must be a positive integer")
+
+    url = (
+        "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
+        f"?vs_currency={vs_currency}&days={days}&interval=daily"
+    )
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "dual-invest-strategy/1.0",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except URLError as e:
+        raise ValueError(f"Failed to fetch real data from CoinGecko: {e}") from e
+
+    prices = payload.get("prices")
+    if not prices:
+        raise ValueError("No prices returned from CoinGecko API")
+
+    daily_closes = {}
+    for ts_ms, close in prices:
+        date = datetime.utcfromtimestamp(ts_ms / 1000).date()
+        daily_closes[date] = float(close)
+
+    candles = [
+        Candle(
+            date=datetime.combine(d, datetime.min.time()),
+            close=price,
+        )
+        for d, price in sorted(daily_closes.items())
+    ]
+    return candles
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="BTC 双币赢稳健策略模拟器")
     parser.add_argument("--csv", help="CSV path with date,close")
     parser.add_argument("--demo", action="store_true", help="Use generated demo data")
+    parser.add_argument(
+        "--real",
+        action="store_true",
+        help="Use real BTC daily closes from CoinGecko",
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=365,
+        help="Number of days for --real source (default: 365)",
+    )
     args = parser.parse_args()
 
-    if not args.csv and not args.demo:
-        parser.error("Please set --csv <file> or --demo")
+    selected_sources = int(bool(args.csv)) + int(args.demo) + int(args.real)
+    if selected_sources != 1:
+        parser.error("Please choose exactly one source: --csv / --demo / --real")
 
-    candles = load_csv(args.csv) if args.csv else generate_demo()
+    try:
+        if args.csv:
+            candles = load_csv(args.csv)
+        elif args.real:
+            candles = load_coingecko(days=args.days)
+        else:
+            candles = generate_demo()
+    except ValueError as e:
+        parser.error(str(e))
+
     cfg = StrategyConfig()
     sim = DualInvestmentSimulator(candles, cfg)
     result = sim.run()

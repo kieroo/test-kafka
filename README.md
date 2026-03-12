@@ -36,6 +36,13 @@ python3 dual_invest_strategy.py --real --days 365 --real-source auto
 - `--real-source auto` 会按 `okx -> binance -> coingecko` 自动回退，适合中国网络环境提高可用性。
 - `--days` 可调整回看天数（例如 180 / 365）；受交易所接口限制，`okx` 最多 300 天，`binance` 最多 1000 天。
 - 若你所在环境无法联网，可先导出 CSV 后使用 `--csv`。
+- 若报 SSL 证书校验错误（`CERTIFICATE_VERIFY_FAILED`），可追加 `--insecure-ssl` 临时关闭证书校验（仅建议在受限网络/内网代理环境下使用）。
+
+示例：
+
+```bash
+python3 dual_invest_strategy.py --real --days 365 --real-source auto --insecure-ssl
+```
 
 ## 自定义数据回测
 

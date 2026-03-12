@@ -39,6 +39,7 @@ class StrategyConfig:
     stress_apr: float = 0.10
     tenor_days: int = 7
     strike_buffer: float = 0.03
+    bear_trend_pause: float = -0.08
 
 
 @dataclass
@@ -104,6 +105,9 @@ class DualInvestmentSimulator:
             trend = self.calc_trend(i)
             vol = self.calc_vol(i)
             if vol > self.cfg.vol_pause_threshold:
+                i += 1
+                continue
+            if trend <= self.cfg.bear_trend_pause:
                 i += 1
                 continue
 
@@ -422,6 +426,24 @@ def main() -> None:
         action="store_true",
         help="Disable SSL certificate verification for --real requests (only for restricted environments)",
     )
+    parser.add_argument(
+        "--max-allocation-ratio",
+        type=float,
+        default=0.35,
+        help="Max portfolio allocation per position (default: 0.35)",
+    )
+    parser.add_argument(
+        "--strike-buffer",
+        type=float,
+        default=0.03,
+        help="Strike distance from spot, e.g. 0.03 = 3%% (default: 0.03)",
+    )
+    parser.add_argument(
+        "--bear-trend-pause",
+        type=float,
+        default=-0.08,
+        help="Pause all new positions when trend <= value, e.g. -0.08 = -8%% (default: -0.08)",
+    )
     args = parser.parse_args()
 
     selected_sources = int(bool(args.csv)) + int(args.demo) + int(args.real)
@@ -438,7 +460,11 @@ def main() -> None:
     except ValueError as e:
         parser.error(str(e))
 
-    cfg = StrategyConfig()
+    cfg = StrategyConfig(
+        max_allocation_ratio=args.max_allocation_ratio,
+        strike_buffer=args.strike_buffer,
+        bear_trend_pause=args.bear_trend_pause,
+    )
     sim = DualInvestmentSimulator(candles, cfg)
     result = sim.run()
 

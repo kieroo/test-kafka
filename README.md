@@ -80,6 +80,13 @@ python3 dual_invest_strategy.py --real --days 365 --real-source binance
 - `base_apr`: `0.18`（基础年化估值）
 - `stress_apr`: `0.10`（高波动折扣后年化）
 
+
+如果你觉得“收益更差了”，可优先确认是否开启了更严格风控参数：
+
+- 默认参数下（不加 `--momentum-guard`）保持原有收益风格。
+- 若开启 `--momentum-guard`，策略会减少交易、提高胜率，通常会牺牲一部分总收益来换更稳健的风险暴露。
+- 可通过 `--buy-low-trend-floor` 与 `--sell-high-trend-cap` 细调保守程度。
+
 ## 重要风险提示
 
 - 双币赢本质是“收益增强 + 条件换仓”，不是保本产品。

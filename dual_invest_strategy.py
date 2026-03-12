@@ -13,11 +13,12 @@ import csv
 import json
 import math
 import random
+import ssl
 import urllib.request
 from urllib.error import URLError
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List
 
 
 @dataclass
@@ -44,6 +45,26 @@ class StrategyConfig:
 class Snapshot:
     date: datetime
     equity_usdt: float
+
+
+def fetch_json(url: str, *, insecure_ssl: bool = False, timeout: int = 15) -> dict | list:
+    """Fetch JSON payload from URL with optional SSL verification bypass.
+
+    Set insecure_ssl=True only in restricted network environments where
+    certificate verification cannot pass.
+    """
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "dual-invest-strategy/1.0",
+        },
+    )
+
+    context = ssl._create_unverified_context() if insecure_ssl else None
+    with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 class DualInvestmentSimulator:
@@ -234,7 +255,7 @@ def generate_demo(days: int = 365) -> List[Candle]:
     return candles
 
 
-def load_coingecko(days: int = 365, vs_currency: str = "usd") -> List[Candle]:
+def load_coingecko(days: int = 365, vs_currency: str = "usd", insecure_ssl: bool = False) -> List[Candle]:
     """Load BTC daily close data from CoinGecko public API.
 
     API endpoint returns [timestamp_ms, price] pairs. We keep the last price
@@ -248,18 +269,9 @@ def load_coingecko(days: int = 365, vs_currency: str = "usd") -> List[Candle]:
         "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
         f"?vs_currency={vs_currency}&days={days}&interval=daily"
     )
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "dual-invest-strategy/1.0",
-        },
-    )
-
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except URLError as e:
+        payload = fetch_json(url, insecure_ssl=insecure_ssl)
+    except (URLError, ssl.SSLError) as e:
         raise ValueError(f"Failed to fetch real data from CoinGecko: {e}") from e
 
     prices = payload.get("prices")
@@ -281,7 +293,7 @@ def load_coingecko(days: int = 365, vs_currency: str = "usd") -> List[Candle]:
     return candles
 
 
-def load_binance(days: int = 365, symbol: str = "BTCUSDT") -> List[Candle]:
+def load_binance(days: int = 365, symbol: str = "BTCUSDT", insecure_ssl: bool = False) -> List[Candle]:
     """Load BTC daily close data from Binance Kline API."""
 
     if days <= 0:
@@ -293,18 +305,9 @@ def load_binance(days: int = 365, symbol: str = "BTCUSDT") -> List[Candle]:
         "https://api.binance.com/api/v3/klines"
         f"?symbol={symbol}&interval=1d&limit={days}"
     )
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "dual-invest-strategy/1.0",
-        },
-    )
-
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except URLError as e:
+        payload = fetch_json(url, insecure_ssl=insecure_ssl)
+    except (URLError, ssl.SSLError) as e:
         raise ValueError(f"Failed to fetch real data from Binance: {e}") from e
 
     if not isinstance(payload, list) or not payload:
@@ -321,7 +324,7 @@ def load_binance(days: int = 365, symbol: str = "BTCUSDT") -> List[Candle]:
     return candles
 
 
-def load_okx(days: int = 365, inst_id: str = "BTC-USDT") -> List[Candle]:
+def load_okx(days: int = 365, inst_id: str = "BTC-USDT", insecure_ssl: bool = False) -> List[Candle]:
     """Load BTC daily close data from OKX Candles API."""
 
     if days <= 0:
@@ -330,18 +333,9 @@ def load_okx(days: int = 365, inst_id: str = "BTC-USDT") -> List[Candle]:
         raise ValueError("OKX source supports up to 300 days per request")
 
     url = f"https://www.okx.com/api/v5/market/history-candles?instId={inst_id}&bar=1D&limit={days}"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "dual-invest-strategy/1.0",
-        },
-    )
-
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except URLError as e:
+        payload = fetch_json(url, insecure_ssl=insecure_ssl)
+    except (URLError, ssl.SSLError) as e:
         raise ValueError(f"Failed to fetch real data from OKX: {e}") from e
 
     data = payload.get("data") if isinstance(payload, dict) else None
@@ -359,12 +353,12 @@ def load_okx(days: int = 365, inst_id: str = "BTC-USDT") -> List[Candle]:
     return candles
 
 
-def load_real_data(days: int, source: str) -> List[Candle]:
+def load_real_data(days: int, source: str, insecure_ssl: bool = False) -> List[Candle]:
     source = source.lower()
     loaders = {
-        "coingecko": lambda: load_coingecko(days=days),
-        "binance": lambda: load_binance(days=days),
-        "okx": lambda: load_okx(days=days),
+        "coingecko": lambda: load_coingecko(days=days, insecure_ssl=insecure_ssl),
+        "binance": lambda: load_binance(days=days, insecure_ssl=insecure_ssl),
+        "okx": lambda: load_okx(days=days, insecure_ssl=insecure_ssl),
     }
 
     if source != "auto":
@@ -405,6 +399,11 @@ def main() -> None:
         choices=["auto", "okx", "binance", "coingecko"],
         help="Data source for --real (default: auto, try okx->binance->coingecko)",
     )
+    parser.add_argument(
+        "--insecure-ssl",
+        action="store_true",
+        help="Disable SSL certificate verification for --real requests (only for restricted environments)",
+    )
     args = parser.parse_args()
 
     selected_sources = int(bool(args.csv)) + int(args.demo) + int(args.real)
@@ -415,7 +414,7 @@ def main() -> None:
         if args.csv:
             candles = load_csv(args.csv)
         elif args.real:
-            candles = load_real_data(days=args.days, source=args.real_source)
+            candles = load_real_data(days=args.days, source=args.real_source, insecure_ssl=args.insecure_ssl)
         else:
             candles = generate_demo()
     except ValueError as e:

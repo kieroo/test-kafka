@@ -40,6 +40,10 @@ class StrategyConfig:
     tenor_days: int = 7
     strike_buffer: float = 0.03
     bear_trend_pause: float = -0.08
+    short_trend_window: int = 5
+    buy_low_trend_floor: float = -0.08
+    sell_high_trend_cap: float = 1.00
+    momentum_guard: bool = False
 
 
 @dataclass
@@ -103,6 +107,7 @@ class DualInvestmentSimulator:
             self.record_equity(today.date, spot)
 
             trend = self.calc_trend(i)
+            short_trend = self.calc_short_trend(i)
             vol = self.calc_vol(i)
             if vol > self.cfg.vol_pause_threshold:
                 i += 1
@@ -118,9 +123,17 @@ class DualInvestmentSimulator:
                 continue
 
             if trend >= 0:
-                did_trade = self.place_sell_high(i, budget)
+                if trend > self.cfg.sell_high_trend_cap:
+                    i += 1
+                    continue
+                did_trade = self.place_sell_high(i, budget, trend=trend, vol=vol)
             else:
-                did_trade = self.place_buy_low(i, budget)
+                # Avoid catching a falling knife: only buy-low in mild downtrend
+                # and when short-term momentum is no longer getting worse.
+                if trend < self.cfg.buy_low_trend_floor or (self.cfg.momentum_guard and short_trend < trend - 0.01):
+                    i += 1
+                    continue
+                did_trade = self.place_buy_low(i, budget, trend=trend, vol=vol)
 
             self.trade_count += int(did_trade)
             i += 1
@@ -134,6 +147,11 @@ class DualInvestmentSimulator:
         past = self.candles[idx - self.cfg.trend_window].close
         return (now / past) - 1.0
 
+    def calc_short_trend(self, idx: int) -> float:
+        now = self.candles[idx].close
+        past = self.candles[idx - self.cfg.short_trend_window].close
+        return (now / past) - 1.0
+
     def calc_vol(self, idx: int) -> float:
         rets = []
         for k in range(idx - self.cfg.vol_window + 1, idx + 1):
@@ -144,21 +162,39 @@ class DualInvestmentSimulator:
         var = sum((r - m) ** 2 for r in rets) / len(rets)
         return math.sqrt(var)
 
-    def est_apr(self, vol: float) -> float:
-        if vol > self.cfg.vol_pause_threshold * 0.8:
-            return self.cfg.stress_apr
-        return self.cfg.base_apr
+    def est_apr(self, vol: float, trend: float) -> float:
+        if not self.cfg.momentum_guard:
+            if vol > self.cfg.vol_pause_threshold * 0.8:
+                return self.cfg.stress_apr
+            return self.cfg.base_apr
 
-    def place_sell_high(self, idx: int, budget_usdt: float) -> bool:
+        base = self.cfg.stress_apr if vol > self.cfg.vol_pause_threshold * 0.8 else self.cfg.base_apr
+        # Mildly raise APR expectation during stronger trend and compress it in weak regimes.
+        adj = 1.0 + max(0.0, trend) * 0.8 - max(0.0, -trend) * 0.3
+        return max(self.cfg.stress_apr * 0.8, min(0.35, base * adj))
+
+    def adaptive_strike_buffer(self, *, trend: float, vol: float, side: str) -> float:
+        if not self.cfg.momentum_guard:
+            return self.cfg.strike_buffer
+
+        if side == "sell_high":
+            extra = max(0.0, trend) * 0.15 + vol * 0.25
+            return min(0.08, self.cfg.strike_buffer + extra)
+
+        extra = max(0.0, -trend) * 0.10 + vol * 0.20
+        return min(0.07, self.cfg.strike_buffer + extra)
+
+    def place_sell_high(self, idx: int, budget_usdt: float, *, trend: float, vol: float) -> bool:
         spot = self.candles[idx].close
         alloc_btc = min(self.btc, budget_usdt / spot)
         if alloc_btc <= 0:
             return False
 
-        strike = spot * (1 + self.cfg.strike_buffer)
+        strike_buffer = self.adaptive_strike_buffer(trend=trend, vol=vol, side="sell_high")
+        strike = spot * (1 + strike_buffer)
         settle_idx = idx + self.cfg.tenor_days
         settle_price = self.candles[settle_idx].close
-        apr = self.est_apr(self.calc_vol(idx))
+        apr = self.est_apr(vol, trend)
         premium_btc = alloc_btc * apr * self.cfg.tenor_days / 365
 
         # if price >= strike, BTC converted to USDT at strike; otherwise keep BTC
@@ -178,16 +214,17 @@ class DualInvestmentSimulator:
 
         return True
 
-    def place_buy_low(self, idx: int, budget_usdt: float) -> bool:
+    def place_buy_low(self, idx: int, budget_usdt: float, *, trend: float, vol: float) -> bool:
         spot = self.candles[idx].close
         alloc_usdt = min(self.usdt, budget_usdt)
         if alloc_usdt <= 0:
             return False
 
-        strike = spot * (1 - self.cfg.strike_buffer)
+        strike_buffer = self.adaptive_strike_buffer(trend=trend, vol=vol, side="buy_low")
+        strike = spot * (1 - strike_buffer)
         settle_idx = idx + self.cfg.tenor_days
         settle_price = self.candles[settle_idx].close
-        apr = self.est_apr(self.calc_vol(idx))
+        apr = self.est_apr(vol, trend)
         premium_usdt = alloc_usdt * apr * self.cfg.tenor_days / 365
 
         # reserve funds until settlement
@@ -444,6 +481,23 @@ def main() -> None:
         default=-0.08,
         help="Pause all new positions when trend <= value, e.g. -0.08 = -8%% (default: -0.08)",
     )
+    parser.add_argument(
+        "--buy-low-trend-floor",
+        type=float,
+        default=-0.08,
+        help="Skip buy-low when long trend is below this floor, e.g. -0.08 = -8%% (default: -0.08)",
+    )
+    parser.add_argument(
+        "--sell-high-trend-cap",
+        type=float,
+        default=1.0,
+        help="Skip sell-high when long trend is above this cap, e.g. 1.0 = 100%% (default: 1.0)",
+    )
+    parser.add_argument(
+        "--momentum-guard",
+        action="store_true",
+        help="Enable stricter buy-low momentum guard to avoid falling-knife entries",
+    )
     args = parser.parse_args()
 
     selected_sources = int(bool(args.csv)) + int(args.demo) + int(args.real)
@@ -464,6 +518,9 @@ def main() -> None:
         max_allocation_ratio=args.max_allocation_ratio,
         strike_buffer=args.strike_buffer,
         bear_trend_pause=args.bear_trend_pause,
+        buy_low_trend_floor=args.buy_low_trend_floor,
+        sell_high_trend_cap=args.sell_high_trend_cap,
+        momentum_guard=args.momentum_guard,
     )
     sim = DualInvestmentSimulator(candles, cfg)
     result = sim.run()
